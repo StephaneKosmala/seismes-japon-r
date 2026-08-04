@@ -1,0 +1,223 @@
+---
+title: "Séismes au Japon : de la routine sismique à Tohoku"
+subtitle: "Une exploration des données USGS (2000-2024)"
+author: "Stéphane Kosmala"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(leaflet)
+```
+
+## Introduction
+
+Le Japon est l'un des pays les plus sismiquement actifs au monde, situé sur
+la "ceinture de feu" du Pacifique, à la jonction de plusieurs plaques
+tectoniques. Ce rapport explore 24 ans de données sismiques (2000-2024)
+issues du catalogue de l'USGS (US Geological Survey), en se concentrant sur
+les séismes de magnitude 4.5 et plus.
+
+L'objectif : comprendre la structure "normale" de l'activité sismique
+japonaise, puis zoomer sur l'événement qui a marqué la période — le séisme
+de Tohoku du 11 mars 2011 pour voir comment les données racontent son
+impact.
+
+**Questions posées à ces données :**
+
+- À quoi ressemble la distribution habituelle des séismes (magnitude, profondeur) ?
+- L'activité sismique est-elle stable dans le temps, ou marquée par des événements exceptionnels ?
+- Comment se comportent les répliques après un séisme majeur ?
+
+```{r import}
+seismes <- read_csv("data/raw/seismes_japon.csv")
+```
+
+## 1. Aperçu et qualité des données
+
+Le jeu de données couvre `r nrow(seismes)` séismes, sur la période allant
+de `r format(min(seismes$temps), "%Y-%m-%d")` à
+`r format(max(seismes$temps), "%Y-%m-%d")`.
+
+```{r qualite}
+# Valeurs manquantes
+na_count <- sum(colSums(is.na(seismes)))
+
+# Doublons
+doublons <- sum(duplicated(seismes$id))
+
+# Valeurs aberrantes
+mag_aberrantes <- seismes %>% filter(magnitude < 0 | magnitude > 10) %>% nrow()
+coord_aberrantes <- seismes %>%
+  filter(latitude < 24 | latitude > 46 | longitude < 122 | longitude > 146) %>%
+  nrow()
+profondeur_aberrante <- seismes %>% filter(profondeur_km < 0) %>% nrow()
+```
+
+Contrôles effectués : `r na_count` valeurs manquantes, `r doublons`
+doublons, `r mag_aberrantes` magnitudes hors plage plausible,
+`r coord_aberrantes` coordonnées hors de la zone géographique attendue, et
+`r profondeur_aberrante` profondeurs négatives. Le jeu de données est propre
+et ne nécessite pas de nettoyage supplémentaire.
+
+## 2. La routine sismique : distributions générales
+
+### Magnitude
+
+```{r dist-magnitude}
+ggplot(seismes, aes(x = magnitude)) +
+  geom_histogram(binwidth = 0.2, fill = "steelblue", color = "white") +
+  labs(title = "Distribution des magnitudes des séismes au Japon",
+       subtitle = "2000-2024, magnitude ≥ 4.5",
+       x = "Magnitude", y = "Nombre de séismes") +
+  theme_minimal()
+```
+
+La distribution suit la forme attendue par la loi de Gutenberg-Richter : une
+décroissance quasi exponentielle où les séismes modérés (proches du seuil
+de 4.5) sont largement majoritaires, et les séismes de forte magnitude
+deviennent rapidement rares. C'est une régularité observée partout dans le
+monde, et le Japon ne fait pas exception malgré son niveau d'activité élevé.
+
+### Profondeur
+
+```{r dist-profondeur}
+ggplot(seismes, aes(x = profondeur_km)) +
+  geom_histogram(binwidth = 10, fill = "darkorange", color = "white") +
+  labs(title = "Distribution des profondeurs des séismes",
+       x = "Profondeur (km)", y = "Nombre de séismes") +
+  theme_minimal()
+```
+
+### Profondeur et magnitude sont-elles liées ?
+
+```{r profondeur-magnitude}
+ggplot(seismes, aes(x = profondeur_km, y = magnitude)) +
+  geom_point(alpha = 0.3, color = "darkblue") +
+  labs(title = "Relation profondeur / magnitude",
+       x = "Profondeur (km)", y = "Magnitude") +
+  theme_minimal()
+```
+
+Le nuage de points ne montre pas de relation linéaire nette : les séismes
+les plus forts se produisent aussi bien en surface qu'en profondeur. Cela
+reflète la diversité des mécanismes tectoniques actifs au Japon (subduction
+en mer, failles crustales sur terre).
+
+## 3. Une activité stable, ou marquée par des ruptures ?
+
+```{r par-annee}
+seismes_par_annee <- seismes %>%
+  mutate(annee = year(temps)) %>%
+  count(annee)
+
+ggplot(seismes_par_annee, aes(x = annee, y = n)) +
+  geom_col(fill = "darkred") +
+  labs(title = "Nombre de séismes par année (magnitude ≥ 4.5)",
+       x = "Année", y = "Nombre de séismes") +
+  theme_minimal()
+```
+
+Un pic massif se détache immédiatement : **2011**. Deux hypothèses peuvent
+l'expliquer : soit un événement sismique exceptionnel, soit un artefact
+technique (par exemple une amélioration du réseau de détection à cette
+période). Si c'était un artefact de détection, on s'attendrait à une hausse
+progressive sur plusieurs années plutôt qu'un pic isolé sur une seule année
+— ce n'est pas le cas ici, ce qui oriente vers un véritable événement
+sismique plutôt qu'un biais de mesure.
+
+## 4. Zoom sur 2011 : le séisme de Tohoku
+
+Le 11 mars 2011, un séisme de magnitude 9.0 a frappé au large de la côte
+Tohoku l'un des plus puissants jamais enregistrés dans le monde. Il a
+généré un tsunami dévastateur et des milliers de répliques dans les mois
+suivants.
+
+```{r zoom-2011}
+seismes %>%
+  filter(year(temps) == 2011) %>%
+  ggplot(aes(x = temps, y = magnitude)) +
+  geom_point(alpha = 0.4, color = "darkred") +
+  labs(title = "Séismes au Japon en 2011",
+       subtitle = "Le séisme de Tohoku (11 mars) et ses répliques",
+       x = "Date", y = "Magnitude") +
+  theme_minimal()
+```
+
+L'explosion du nombre de points à partir de mars confirme l'hypothèse :
+c'est bien la séquence de répliques de Tohoku qui explique le pic annuel
+observé précédemment.
+
+### La décroissance des répliques : une loi physique observable
+
+```{r repliques}
+tohoku_date <- as_datetime("2011-03-11")
+
+repliques <- seismes %>%
+  filter(temps >= tohoku_date, temps <= tohoku_date + days(90)) %>%
+  mutate(jours_apres = as.numeric(difftime(temps, tohoku_date, units = "days")))
+
+repliques %>%
+  count(jour = floor(jours_apres)) %>%
+  ggplot(aes(x = jour, y = n)) +
+  geom_line(color = "darkred") +
+  labs(title = "Décroissance des répliques après Tohoku (90 jours)",
+       subtitle = "Comportement cohérent avec la loi d'Omori",
+       x = "Jours après le séisme principal", y = "Nombre de répliques par jour") +
+  theme_minimal()
+```
+
+La courbe montre une chute rapide du nombre de répliques dans les premiers
+jours, suivie d'une stabilisation progressive. Ce comportement correspond à
+la **loi d'Omori**, une régularité empirique bien documentée en
+sismologie : le taux de répliques après un séisme principal décroît
+approximativement en 1/t. Le voir apparaître aussi nettement sur des
+données réelles, sans modélisation complexe, est une belle validation
+empirique d'une loi physique connue.
+
+### Où se concentrent les répliques ?
+
+```{r carte-repliques}
+repliques %>%
+  leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(
+    lng = ~longitude, lat = ~latitude,
+    radius = ~magnitude,
+    color = "darkred", fillOpacity = 0.4,
+    popup = ~paste("Magnitude:", magnitude, "<br>Date:", temps)
+  ) %>%
+  setView(lng = 142, lat = 38, zoom = 5)
+```
+
+Les répliques se concentrent le long de la zone de subduction au large de
+la côte Tohoku, là où la plaque Pacifique plonge sous la plaque
+nord-américaine cohérent avec le mécanisme physique du séisme principal.
+
+## Conclusion
+
+Cette exploration révèle deux niveaux de lecture dans l'activité sismique
+japonaise :
+
+- une **routine** régulière et prévisible (distribution des magnitudes
+  conforme à la loi de Gutenberg-Richter, activité globalement stable
+  d'une année sur l'autre)
+- une **rupture** ponctuelle mais majeure en 2011, dont la signature
+  (décroissance des répliques, concentration géographique) suit des lois
+  physiques bien connues en sismologie
+
+**Limites de l'analyse** : le seuil de magnitude ≥ 4.5 exclut les
+nombreux petits séismes, qui représentent la majorité de l'activité
+sismique réelle au Japon. La bounding box géographique utilisée pour la
+requête inclut aussi des zones maritimes voisines (Russie, péninsule
+coréenne), ce qui peut légèrement gonfler le compte pour les zones
+frontalières.
+
